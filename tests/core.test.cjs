@@ -52,6 +52,9 @@ test('CSV quotes fields and neutralizes spreadsheet formulas',()=>{
   assert.match(csv,/"'=HYPERLINK\(""https:\/\/bad.example""/);
   assert.match(csv,/"'-VALUE"/);
   assert.match(csv,/"""name"",corp"/);
+  assert.equal(core.escapeCsv('\tcmd'),`"'\tcmd"`);
+  assert.equal(core.escapeCsv('\rcmd'),`"'\rcmd"`);
+  assert.equal(core.escapeCsv('plain text'),'"plain text"');
 });
 
 test('diagnostic hints only use actual failed event types',()=>{

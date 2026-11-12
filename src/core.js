@@ -179,7 +179,8 @@
   function escapeCsv(value) {
     let s = String(value ?? '');
     // Defuse spreadsheet-formula injection when CSV is opened in Excel/Sheets.
-    if (/^[\s\u0000-\u001f]*[=+@-]/.test(s)) s = "'" + s;
+    // A leading tab or carriage return is itself treated as a formula trigger (OWASP).
+    if (/^[\t\r]/.test(s) || /^[\s\u0000-\u001f]*[=+@-]/.test(s)) s = "'" + s;
     return `"${s.replace(/"/g, '""')}"`;
   }
 
