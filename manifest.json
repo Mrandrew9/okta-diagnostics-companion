@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Okta Diagnostics Companion (Community)",
+  "version": "0.1.0",
+  "description": "Read-only, user-focused Okta System Log, app assignment and sign-in diagnostics alongside Rockstar.",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.okta.com/*",
+        "https://*.okta-emea.com/*",
+        "https://*.oktapreview.com/*"
+      ],
+      "js": [
+        "src/core.js",
+        "src/content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
