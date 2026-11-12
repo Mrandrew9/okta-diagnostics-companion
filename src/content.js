@@ -30,6 +30,10 @@
     .scroll{max-height:300px;overflow:auto;border:1px solid #e2e8f0;border-radius:7px}
     table{width:100%;border-collapse:collapse;font-size:11px}th,td{padding:6px;text-align:left;border-bottom:1px solid #e2e8f0;vertical-align:top}th{position:sticky;top:0;background:#f8fafc}
     .tiny{font-size:11px}.summary{background:#f8fafc;border:1px solid #e2e8f0;padding:10px;border-radius:8px;margin-top:9px;white-space:pre-wrap}
+    .diag{margin-top:9px;border:1px solid #e2e8f0;border-radius:8px;padding:10px}.diag h3{margin-top:0}
+    .finding{margin:4px 0;padding:6px 8px;border-radius:6px;background:#f8fafc}.finding.error{background:#fef2f2}.finding.warning{background:#fffbeb}.finding.ok{background:#f0fdf4;color:#166534}
+    details{border-top:1px solid #e2e8f0;padding:6px 0}summary{cursor:pointer;font-weight:650}ul{margin:4px 0 4px 18px;padding:0}
+    .recorded{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;background:#f1f5f9;padding:4px 6px;border-radius:5px;white-space:pre-wrap;word-break:break-word}
     @media(max-width:480px){.grid{grid-template-columns:1fr}}
   `;
   shadow.appendChild(style);
@@ -66,12 +70,13 @@
   const info=element('div',{className:'summary',text:'Enter an Okta user ID or login to begin.'});panel.appendChild(info);
   const stats=element('div',{className:'stats'});panel.appendChild(stats);
   const hints=element('div',{className:'summary',text:'Diagnostic hints appear here when supported by failed or denied events.'});panel.appendChild(hints);
+  const diag=element('section',{className:'diag'});diag.setAttribute('aria-label','Provisioning diagnosis');diag.hidden=true;panel.appendChild(diag);
   const scroll=element('div',{className:'scroll'});panel.appendChild(scroll);
   msg.setAttribute('role','status');msg.setAttribute('aria-live','polite');
   let displayed=[];
 
   run.addEventListener('click',async()=>{
-    run.disabled=true;exportButton.disabled=true;displayed=[];clear(stats);clear(scroll);hints.textContent='Analyzing…';
+    run.disabled=true;exportButton.disabled=true;displayed=[];clear(stats);clear(scroll);clear(diag);diag.hidden=true;hints.textContent='Analyzing…';
     try{
       const start=new Date(sinceInput.value),end=new Date(untilInput.value);
       core.validateWindow(start,end);
@@ -89,9 +94,10 @@
       displayed=appId ? unfiltered.filter(x=>core.matchesApp(x,appId)) : unfiltered;
       const s=core.summarize(displayed);
       const bits=[`User: ${resolved} · Okta status: ${user.status || 'unknown'}`,`Events returned: ${s.total} · failures: ${s.failures} · denials: ${s.denials}`];
+      let appUser=null;
       if(appId){
         try {
-          const appUser=await getJson(`/api/v1/apps/${encodeURIComponent(appId)}/users/${encodeURIComponent(user.id)}`);
+          appUser=await getJson(`/api/v1/apps/${encodeURIComponent(appId)}/users/${encodeURIComponent(user.id)}`);
           bits.push(`App-user record: ${appUser.status || 'found (status not supplied)'}`);
         } catch(e) {
           bits.push(`App-user record: not confirmed (${e.message}).`);
@@ -106,6 +112,7 @@
       }
       const observedHints=core.triageHints(displayed);
       hints.textContent=observedHints.length ? 'Observed failure patterns (not definitive root causes):\n' + observedHints.map(h=>`• ${h.count} × ${h.eventType}: ${h.guidance}`).join('\n') : 'No pre-defined failure patterns detected in the returned events. Inspect individual event outcomes below.';
+      renderDiagnosis(core.diagnoseProvisioning(displayed,appUser),diag);
       renderTable(displayed,scroll);
       exportButton.disabled=displayed.length===0;
       msg.textContent='Report generated locally. A failed or denied event is an observed outcome, not an automatic root-cause determination.';
@@ -137,6 +144,35 @@
   }
   function localDateTime(d){const z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}T${z(d.getHours())}:${z(d.getMinutes())}`;}
   function clear(node){while(node.firstChild)node.firstChild.remove();}
+  function renderDiagnosis(d,target){
+    if(!d.attempts.length && !d.appUserFindings.length)return;
+    target.hidden=false;
+    target.appendChild(element('h3',{text:'Provisioning diagnosis'}));
+    const headline=d.failedAttempts
+      ? `${d.failedAttempts} of ${d.attempts.length} provisioning attempt(s) failed. Most recent failure: ${d.lastFailure}.`
+      : `${d.attempts.length} provisioning attempt(s) found with no recorded failure.`;
+    target.appendChild(element('p',{text:headline}));
+    if(d.recoveredAt)target.appendChild(element('p',{className:'finding ok',text:`A later provisioning attempt succeeded at ${d.recoveredAt}. Earlier failures may already be resolved; confirm in the app.`}));
+    for(const f of d.appUserFindings)target.appendChild(element('p',{className:'finding '+f.level,text:f.text}));
+    const failed=d.attempts.filter(a=>a.failed).slice(0,10);
+    if(d.failedAttempts>failed.length)target.appendChild(element('p',{className:'muted',text:`Showing the 10 most recent of ${d.failedAttempts} failed attempts.`}));
+    failed.forEach((a,i)=>{
+      const box=element('details');if(i===0)box.open=true;
+      box.appendChild(element('summary',{text:`${a.last}${a.app?' · '+a.app:''} · ${a.causes.map(c=>c.title).join('; ')}`}));
+      box.appendChild(element('p',{className:'muted tiny',text:`Transaction ${a.transactionId}${a.transactionType?' ('+a.transactionType+')':''} · events: ${a.eventTypes.join(', ')}`}));
+      for(const c of a.causes){
+        box.appendChild(element('p',{text:'Why: '+c.why}));
+        const ul=element('ul');for(const step of c.checks)ul.appendChild(element('li',{text:step}));
+        box.appendChild(element('p',{text:'What to check:'}));box.appendChild(ul);
+        for(const ev of c.evidence.slice(0,3)){
+          box.appendChild(element('p',{className:'muted tiny',text:`${ev.published} · ${ev.eventType}${ev.eventId?' · event '+ev.eventId:''}`}));
+          box.appendChild(element('div',{className:'recorded',text:ev.recorded ? 'Okta recorded: '+ev.recorded : 'Okta recorded no error text for this event.'}));
+        }
+      }
+      target.appendChild(box);
+    });
+    target.appendChild(element('p',{className:'muted tiny',text:'Causes are matched from error text Okta recorded. Confirm in the application before changing configuration.'}));
+  }
   function renderTable(events,target){
     if(!events.length){target.appendChild(element('p',{className:'muted',text:'No matching events in the returned pages. This does not prove no incident occurred.'}));return;}
     const table=element('table'),thead=element('thead'),tbody=element('tbody');
