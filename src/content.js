@@ -139,16 +139,27 @@
       }tbody.appendChild(tr);
     }table.append(thead,tbody);target.appendChild(table);
   }
+  function apiError(response,label){
+    const status=response.status;
+    if(status===429){
+      const reset=Number(response.headers.get('X-Rate-Limit-Reset'));
+      const wait=Number.isFinite(reset)&&reset>0?Math.max(0,Math.ceil(reset-Date.now()/1000)):null;
+      return new Error(`${label} rate limit reached (HTTP 429). Wait${wait!==null?` about ${wait}s`:' a minute'} and retry, or narrow the time window.`);
+    }
+    if(status===401||status===403)return new Error(`${label} HTTP ${status}: your current admin session or role is not authorized for this request.`);
+    if(status===404)return new Error(`${label} HTTP 404: the requested user or app was not found or is not visible to your role.`);
+    return new Error(`${label} HTTP ${status}`);
+  }
   async function getJson(path){
     const response=await fetch(path,{method:'GET',credentials:'same-origin',headers:{Accept:'application/json'},redirect:'error'});
-    if(!response.ok)throw new Error(`Okta API HTTP ${response.status}`);
+    if(!response.ok)throw apiError(response,'Okta API');
     return response.json();
   }
   async function getLogPage(url){
     const target=new URL(url);
     if(target.origin!==location.origin||target.pathname!=='/api/v1/logs')throw new Error('Refused unexpected API target.');
     const response=await fetch(target.href,{method:'GET',credentials:'same-origin',headers:{Accept:'application/json'},redirect:'error'});
-    if(!response.ok)throw new Error(`System Log API HTTP ${response.status}`);
+    if(!response.ok)throw apiError(response,'System Log API');
     return {events:await response.json(),link:response.headers.get('Link')};
   }
 })();
