@@ -192,7 +192,7 @@
       title: 'User or resource not found in the application',
       pattern: /\b404\b|not found|does not exist|no such (user|resource|account)/i,
       why: 'Okta tried to update or deactivate an account the application no longer has, or the integration endpoint URL is wrong.',
-      checks: ['Check whether the account was deleted directly in the application.', 'Verify the base URL/endpoint configured in the Okta app\'s Provisioning settings.', 'If the account is gone, unassign and reassign the user to recreate it.']
+      checks: ['Check whether the account was deleted directly in the application.', 'Verify the base URL/endpoint configured in the Okta app\'s Provisioning settings.', 'Do not unassign/reassign automatically: first verify the existing account link, app provisioning rules and deprovisioning consequences; follow an approved recovery procedure.']
     },
     {
       id: 'license_or_quota',
@@ -234,11 +234,22 @@
   const NO_DETAIL_CAUSE = Object.freeze({
     id: 'no_detail',
     title: 'Failure recorded without an error message',
-    why: 'Okta logged a failed provisioning event but did not include the error text in System Log. Okta keeps the full error with the failed provisioning task.',
-    checks: ['In the Admin Console open Dashboard > Tasks and select this application\'s failed provisioning task to read the error.', 'Or open the app\'s Assignments tab and select the error icon next to the user.', 'After fixing the cause, use Retry on the task.']
+    why: 'Okta logged a failed provisioning event but did not include the error text in System Log. The related failed provisioning task may provide additional error details.',
+    checks: ['In the Admin Console open Dashboard > Tasks and select this application\'s failed provisioning task to read the error.', 'Or open the app\'s Assignments tab and select the error icon next to the user.', 'After confirming the cause and reviewing downstream impact, retry through the approved admin procedure.']
   });
 
   const ERROR_KEY = /error|reason|message|cause|status|response|detail|exception|fault/i;
+
+  // Okta-provided error fields are untrusted and may contain credentials or PII
+  // inside an otherwise innocuous string. Scrub VALUES, not only field names.
+  function redactSensitiveText(value) {
+    return String(value ?? '')
+      .replace(/\b(?:https?:\/\/|www\.)[^\s<>"']+/gi, '[redacted URL]')
+      .replace(/\b(?:Bearer|SSWS|Basic)\s+[A-Za-z0-9+/._~=-]+/gi, '[redacted authorization]')
+      .replace(/\b((?:api[_ -]?key|api[_ -]?token|(?:access|refresh|id)[_ -]?token|client[_ -]?secret|authorization|password|secret|cookie|token))(\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1$2[redacted]')
+      .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[redacted email]')
+      .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, '[redacted IP]');
+  }
 
   // Collect error text Okta recorded on an event. Never includes request URLs or tokens.
   function provisioningErrorText(event) {
@@ -254,7 +265,7 @@
         if (text && !parts.includes(text)) parts.push(text);
       }
     }
-    return parts.join(' | ').slice(0, 1000);
+    return redactSensitiveText(parts.join(' | ')).slice(0, 1000);
   }
 
   function isProvisioningFailure(event) {
@@ -278,7 +289,7 @@
     const findings = [];
     const status = String(appUser.status || '').toUpperCase();
     const sync = String(appUser.syncState || '').toUpperCase();
-    if (sync === 'ERROR') findings.push({ level: 'error', text: `App-user sync state is ERROR${status ? ` (status ${status})` : ''}. Okta's last sync to this app failed. The full error is in Dashboard > Tasks for this app; fix it and select Retry.` });
+    if (sync === 'ERROR') findings.push({ level: 'error', text: `App-user sync state is ERROR${status ? ` (status ${status})` : ''}. Okta's last sync to this app failed. Additional error details may be available in Dashboard > Tasks; verify the cause and get approval before retrying.` });
     else if (sync === 'OUT_OF_SYNC') findings.push({ level: 'warning', text: 'App-user sync state is OUT_OF_SYNC. Profile changes have not yet been pushed to the app.' });
     else if (sync === 'SYNCING') findings.push({ level: 'info', text: 'App-user sync state is SYNCING. A sync is in progress; re-check shortly.' });
     else if (sync === 'DISABLED') findings.push({ level: 'info', text: 'App-user sync state is DISABLED. Profile push may not be enabled for this app.' });
@@ -288,14 +299,48 @@
     return findings;
   }
 
+
+  // Only a later SUCCESS for the SAME user, app and event type can support a
+  // limited recovery signal. A different app/action, or an event lacking IDs,
+  // must never be presented as a recovery from the failed operation.
+  function provisioningIdentity(event) {
+    const targets = Array.isArray(event?.target) ? event.target : [];
+    const user = targets.find(t => /^User$/i.test(String(t?.type || '')) && t?.id);
+    const app = targets.find(t => /^(AppInstance|Application)$/i.test(String(t?.type || '')) && t?.id);
+    return {
+      userId: String(user?.id || ''),
+      appId: String(app?.id || ''),
+      eventType: String(event?.eventType || '')
+    };
+  }
+
   function diagnoseProvisioning(events, appUser) {
+    const provided = Array.isArray(events) ? events : [];
     const groups = new Map();
-    for (const event of Array.isArray(events) ? events : []) {
+    for (const event of provided) {
       if (classify(event) !== CATEGORIES.PROVISIONING) continue;
-      const key = event?.transaction?.id || event?.uuid || `${event?.published}|${event?.eventType}`;
+      const key = event?.transaction?.id || event?.uuid || [event?.published, event?.eventType].join('|');
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(event);
     }
+    const successful = provided.filter(event =>
+      classify(event) === CATEGORIES.PROVISIONING &&
+      outcomeResult(event) === 'SUCCESS'
+    );
+    function laterMatchingSuccess(failure) {
+      const identity = provisioningIdentity(failure);
+      if (!identity.userId || !identity.appId || !identity.eventType || !failure?.published) return '';
+      const matches = successful.filter(candidate => {
+        const other = provisioningIdentity(candidate);
+        return other.userId === identity.userId &&
+          other.appId === identity.appId &&
+          other.eventType === identity.eventType &&
+          candidate.published > failure.published &&
+          candidate?.transaction?.id !== failure?.transaction?.id;
+      });
+      return matches.map(e => e.published).sort()[0] || '';
+    }
+
     const attempts = [...groups.entries()].map(([transactionId, list]) => {
       list.sort((a, b) => String(a.published || '').localeCompare(String(b.published || '')));
       const failed = list.filter(isProvisioningFailure);
@@ -303,30 +348,37 @@
       for (const ev of failed) {
         const cause = provisioningCause(ev);
         if (!causes.has(cause.id)) causes.set(cause.id, { id: cause.id, title: cause.title, why: cause.why, checks: cause.checks, evidence: [] });
-        causes.get(cause.id).evidence.push({ published: ev.published || '', eventType: ev.eventType || '', recorded: provisioningErrorText(ev), message: ev.displayMessage || '', eventId: ev.uuid || '' });
+        causes.get(cause.id).evidence.push({ published: ev.published || '', eventType: ev.eventType || '', recorded: provisioningErrorText(ev), message: redactSensitiveText(ev.displayMessage || ''), eventId: ev.uuid || '' });
       }
+      const matchedSuccesses = failed.map(laterMatchingSuccess);
       return {
         transactionId,
         transactionType: list[0]?.transaction?.type || '',
         first: list[0]?.published || '',
         last: list[list.length - 1]?.published || '',
+        lastFailure: failed.map(e => e.published || '').sort().at(-1) || '',
         app: list.map(appTarget).find(Boolean)?.displayName || '',
         eventTypes: [...new Set(list.map(e => e.eventType || ''))],
         failed: failed.length > 0,
+        // Every failed event in this attempt must have a corresponding later
+        // successful event before showing a recovery indicator for the attempt.
+        recoveredAt: matchedSuccesses.length && matchedSuccesses.every(Boolean)
+          ? matchedSuccesses.sort().at(-1) : '',
         causes: [...causes.values()]
       };
     }).sort((a, b) => b.last.localeCompare(a.last));
-    const failedAttempts = attempts.filter(a => a.failed);
-    const lastFailure = failedAttempts[0]?.last || '';
-    const laterSuccess = attempts.find(a => !a.failed && lastFailure && a.last > lastFailure);
+    const failedAttempts = attempts.filter(a => a.failed)
+      .sort((a, b) => b.lastFailure.localeCompare(a.lastFailure));
+    const latestFailure = failedAttempts[0];
     return {
       attempts,
       failedAttempts: failedAttempts.length,
-      lastFailure,
-      recoveredAt: laterSuccess ? laterSuccess.last : '',
+      lastFailure: latestFailure?.lastFailure || '',
+      recoveredAt: latestFailure?.recoveredAt || '',
       appUserFindings: interpretAppUser(appUser)
     };
   }
+
 
   function rowFor(event) {
     return {
@@ -334,8 +386,8 @@
       category: classify(event),
       eventType: event?.eventType || '',
       outcome: event?.outcome?.result || '',
-      reason: event?.outcome?.reason || '',
-      message: event?.displayMessage || '',
+      reason: redactSensitiveText(event?.outcome?.reason || ''),
+      message: redactSensitiveText(event?.displayMessage || ''),
       app: appTarget(event)?.displayName || '',
       actor: event?.actor?.alternateId || '',
       ip: event?.client?.ipAddress || '',
@@ -361,7 +413,7 @@
     })].join('\r\n') + '\r\n';
   }
 
-  const api = { CATEGORIES, validateIdentifier, validateWindow, buildUserLogUrl, parseNextLink, collectLogs, classify, isFailure, isDenied, isAdverse, appTarget, matchesApp, summarize, triageHints, rowFor, escapeCsv, toCsv, PROVISIONING_CAUSES, provisioningErrorText, isProvisioningFailure, provisioningCause, interpretAppUser, diagnoseProvisioning };
+  const api = { CATEGORIES, validateIdentifier, validateWindow, buildUserLogUrl, parseNextLink, collectLogs, classify, isFailure, isDenied, isAdverse, appTarget, matchesApp, summarize, triageHints, rowFor, escapeCsv, toCsv, redactSensitiveText, provisioningIdentity, PROVISIONING_CAUSES, provisioningErrorText, isProvisioningFailure, provisioningCause, interpretAppUser, diagnoseProvisioning };
   root.OktaDiagnosticsCore = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
