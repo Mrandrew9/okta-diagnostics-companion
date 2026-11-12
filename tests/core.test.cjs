@@ -10,13 +10,16 @@ test('builds bounded and encoded Okta log query', () => {
   const url = new URL(core.buildUserLogUrl(ORIGIN, ID, S, E, 'target.id'));
   assert.equal(url.pathname, '/api/v1/logs');
   assert.equal(url.searchParams.get('filter'), `target.id eq "${ID}"`);
-  assert.equal(url.searchParams.get('until'), E.replace('.000Z','Z').replace('Z','.000Z'));
+  assert.equal(url.searchParams.get('until'), '2026-11-04T00:00:00.000Z');
+  assert.equal(url.searchParams.get('since'), '2026-11-01T00:00:00.000Z');
 });
 
 test('rejects invalid query IDs and date windows', () => {
   assert.throws(()=>core.buildUserLogUrl(ORIGIN,'123" or eventType eq "abc',S,E));
   assert.throws(()=>core.validateWindow('2026-01-01','2026-03-01'),/31 days/);
   assert.throws(()=>core.validateWindow('2026-11-04','2026-11-01'),/end after/);
+  const future=new Date(Date.now()+60*60*1000);
+  assert.throws(()=>core.validateWindow(new Date(future.getTime()-86400000),future),/future/);
 });
 
 test('pagination follows same-origin next only',()=>{
