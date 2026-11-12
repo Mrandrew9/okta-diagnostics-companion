@@ -1,0 +1,10 @@
+.DS_Store
+*.log
+.env
+.env.*
+*.csv
+!tests/fixtures/*.csv
+*.jsonl
+node_modules/
+coverage/
+*.zip
