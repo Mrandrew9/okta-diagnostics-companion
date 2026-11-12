@@ -60,7 +60,7 @@
   const msg=element('p',{className:'muted',text:'Searches bounded user log events by actor and target. Results are limited to 3 pages per query (up to 600 before deduplication).'});panel.appendChild(msg);
   const info=element('div',{className:'summary',text:'Enter an Okta user ID or login to begin.'});panel.appendChild(info);
   const stats=element('div',{className:'stats'});panel.appendChild(stats);
-  const hints=element('div',{className:'summary',text:'Diagnostic hints appear here when supported by failed events.'});panel.appendChild(hints);
+  const hints=element('div',{className:'summary',text:'Diagnostic hints appear here when supported by failed or denied events.'});panel.appendChild(hints);
   const scroll=element('div',{className:'scroll'});panel.appendChild(scroll);
   let displayed=[];
 
@@ -82,7 +82,7 @@
       const unfiltered=logs.events;
       displayed=appId ? unfiltered.filter(x=>core.matchesApp(x,appId)) : unfiltered;
       const s=core.summarize(displayed);
-      const bits=[`User: ${resolved} · Okta status: ${user.status || 'unknown'}`,`Events returned: ${s.total} · failures: ${s.failures}`];
+      const bits=[`User: ${resolved} · Okta status: ${user.status || 'unknown'}`,`Events returned: ${s.total} · failures: ${s.failures} · denials: ${s.denials}`];
       if(appId){
         try {
           const appUser=await getJson(`/api/v1/apps/${encodeURIComponent(appId)}/users/${encodeURIComponent(user.id)}`);
@@ -95,14 +95,14 @@
       bits.push('Assignment or app-user presence does not prove downstream SCIM provisioning succeeded. Review corresponding System Log events.');
       if(logs.pageLimitHit)bits.push('Partial results: safety page limit reached. Narrow the time window for more complete coverage.');
       info.textContent=bits.join('\n');
-      for(const [name,value] of Object.entries({Events:s.total,Failures:s.failures,'Sign-ins':s.signIn,Provisioning:s.provisioning,Security:s.security})){
+      for(const [name,value] of Object.entries({Events:s.total,Failures:s.failures,Denials:s.denials,'Sign-ins':s.signIn,Provisioning:s.provisioning,Security:s.security})){
         stats.appendChild(element('span',{className:'pill',text:`${name}: ${value}`}));
       }
       const observedHints=core.triageHints(displayed);
       hints.textContent=observedHints.length ? 'Observed failure patterns (not definitive root causes):\n' + observedHints.map(h=>`• ${h.count} × ${h.eventType}: ${h.guidance}`).join('\n') : 'No pre-defined failure patterns detected in the returned events. Inspect individual event outcomes below.';
       renderTable(displayed,scroll);
       exportButton.disabled=displayed.length===0;
-      msg.textContent='Report generated locally. A failed event is an observed outcome, not an automatic root-cause determination.';
+      msg.textContent='Report generated locally. A failed or denied event is an observed outcome, not an automatic root-cause determination.';
     }catch(e){hints.textContent='No diagnostic hints available.';msg.className='error';msg.textContent=`Could not complete diagnostics: ${e.message}`;info.textContent='If the API returns 401/403, check your Okta Admin login and role permissions. If the browser blocks requests, review tenant CORS/session settings; do not paste an API token into this extension.';}
     finally{run.disabled=false;}
   });

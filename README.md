@@ -16,7 +16,7 @@ A small, independently written Chrome extension designed to run **alongside** th
 | --- | --- |
 | User lookup | Resolve one login/ID using `GET /api/v1/users/{id}` and display current Okta user status |
 | User-related System Log | Bounded queries filtered separately by `actor.id` and `target.id`; deduplicated and ordered locally |
-| Failure breakdown | Count observed `FAILURE` outcomes and classify relevant authentication, provisioning, and policy/security events |
+| Failure breakdown | Count observed `FAILURE` and `DENY` outcomes (Okta records policy denials as `DENY`) and classify relevant authentication, provisioning, and policy/security events |
 | Application-specific evidence | Optional app ID: show the corresponding app-user record when accessible and filter log events explicitly targeting the app |
 | Guided triage | Explain a few **observed event types** without inventing root causes |
 | CSV evidence export | Explicit local download of currently displayed events, with CSV formula-injection protection |

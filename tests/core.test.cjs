@@ -64,3 +64,19 @@ test('diagnostic hints only use actual failed event types',()=>{
   assert.equal(hints.length,1);
   assert.equal(hints[0].eventType,'application.integration.authentication_failure');
 });
+
+test('policy denials recorded as DENY are counted and produce hints',()=>{
+  const events=[
+    {eventType:'application.policy.sign_on.deny_access',outcome:{result:'DENY'}},
+    {eventType:'user.authentication.sso',outcome:{result:'FAILURE'}},
+    {eventType:'user.authentication.sso',outcome:{result:'SUCCESS'}}
+  ];
+  const s=core.summarize(events);
+  assert.equal(s.failures,1);
+  assert.equal(s.denials,1);
+  assert.equal(core.isAdverse(events[0]),true);
+  assert.equal(core.isAdverse(events[2]),false);
+  const hints=core.triageHints(events);
+  assert.equal(hints.length,1);
+  assert.equal(hints[0].eventType,'application.policy.sign_on.deny_access');
+});

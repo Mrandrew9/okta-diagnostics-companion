@@ -106,8 +106,21 @@
     return CATEGORIES.OTHER;
   }
 
+  function outcomeResult(event) {
+    return String(event?.outcome?.result || '').toUpperCase();
+  }
+
   function isFailure(event) {
-    return String(event?.outcome?.result || '').toUpperCase() === 'FAILURE';
+    return outcomeResult(event) === 'FAILURE';
+  }
+
+  function isDenied(event) {
+    return outcomeResult(event) === 'DENY';
+  }
+
+  // Okta records policy denials as DENY rather than FAILURE; both are adverse outcomes.
+  function isAdverse(event) {
+    return isFailure(event) || isDenied(event);
   }
 
   function appTarget(event) {
@@ -124,6 +137,7 @@
     return {
       total: events.length,
       failures: events.filter(isFailure).length,
+      denials: events.filter(isDenied).length,
       signIn: events.filter(e => classify(e) === CATEGORIES.SIGN_IN).length,
       provisioning: events.filter(e => classify(e) === CATEGORIES.PROVISIONING).length,
       security: events.filter(e => classify(e) === CATEGORIES.SECURITY).length
@@ -140,7 +154,7 @@
     ];
     const hints = [];
     for (const [eventType, guidance] of matches) {
-      const observed = events.filter(e => e?.eventType === eventType && isFailure(e));
+      const observed = events.filter(e => e?.eventType === eventType && isAdverse(e));
       if (observed.length) hints.push({ eventType, count: observed.length, guidance });
     }
     return hints;
@@ -177,7 +191,7 @@
     })].join('\r\n') + '\r\n';
   }
 
-  const api = { CATEGORIES, validateIdentifier, validateWindow, buildUserLogUrl, parseNextLink, collectLogs, classify, isFailure, appTarget, matchesApp, summarize, triageHints, rowFor, escapeCsv, toCsv };
+  const api = { CATEGORIES, validateIdentifier, validateWindow, buildUserLogUrl, parseNextLink, collectLogs, classify, isFailure, isDenied, isAdverse, appTarget, matchesApp, summarize, triageHints, rowFor, escapeCsv, toCsv };
   root.OktaDiagnosticsCore = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
