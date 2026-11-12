@@ -18,7 +18,7 @@ A small, independently written Chrome extension designed to run **alongside** th
 | User-related System Log | Bounded queries filtered separately by `actor.id` and `target.id`; deduplicated and ordered locally |
 | Failure breakdown | Count observed `FAILURE` and `DENY` outcomes (Okta records policy denials as `DENY`) and classify relevant authentication, provisioning, and policy/security events |
 | Application-specific evidence | Optional app ID: show the corresponding app-user record when accessible and filter log events explicitly targeting the app |
-| Provisioning diagnosis | Group provisioning events into attempts by `transaction.id`, read the error text Okta recorded, map it to a likely cause (see below) with what to check, interpret the app-user `syncState`/`status`, and note when a later attempt succeeded |
+| Provisioning diagnosis | Group provisioning events into attempts by `transaction.id`, read the error text Okta recorded, map it to a likely cause (see below) with what to check, interpret the app-user `syncState`/`status`, and flag a later matching SUCCESS event (same user, app, and operation; not proof of downstream recovery) |
 | Guided triage | Explain a few **observed event types** without inventing root causes |
 | CSV evidence export | Explicit local download of currently displayed events, with CSV formula-injection protection |
 | Privacy controls | No telemetry, no analytics, no API token prompt, no local storage; API calls go to the current Okta origin |
@@ -70,7 +70,7 @@ When a user fails to provision to an app, the panel shows each failed attempt wi
 
 Okta often logs provisioning failures (for example `application.provision.user.sync` with legacy type `app.user_management.provision_user_failed`) **without** any error text. In that case the companion says so and points to **Dashboard > Tasks** (or the error icon on the app's Assignments tab), where Okta keeps the full error and a Retry option. It does not guess.
 
-With an app ID, the app-user record's `syncState` is also interpreted: `ERROR` (last sync failed), `OUT_OF_SYNC`, `SYNCING`, `DISABLED`, or `SYNCHRONIZED`, together with `STAGED`/`PENDING` status and `lastSync`. The CSV export includes a `cause` column for failed provisioning events.
+With an app ID, the app-user record's `syncState` is also interpreted: `ERROR` (last sync failed), `OUT_OF_SYNC`, `SYNCING`, `DISABLED`, or `SYNCHRONIZED`, together with `STAGED`/`PENDING` status and `lastSync`. The CSV export includes a `cause` column for failed provisioning events. A later `SUCCESS` record is displayed as a **possible successful retry** only when the user ID, app ID, and event type match the failed operation; actual downstream access still requires separate confirmation.
 
 ## Query and evidence limitations
 
@@ -81,6 +81,9 @@ With an app ID, the app-user record's `syncState` is also interpreted: `ERROR` (
 - The optional app filter matches events whose `target` explicitly contains the app ID. Related events with missing/different app targets will not appear in that filtered view.
 - User status, app assignment, app-user record status, downstream SCIM delivery, and successful end-user access are **different facts**. Do not conflate them.
 - Displayed security indicators and guidance are **triage hints** anchored to recorded event types, not definitive incident attribution.
+- Error details from Okta are untrusted and can accidentally contain credentials or personal data. The companion applies best-effort **value-level redaction** of tokens, passwords, URLs, email addresses and IP addresses to displayed error text and CSV message/reason fields. This is not an exhaustive DLP system; inspect any export before sharing.
+- A recovery indicator requires a later matching successful event for the **same user, application and provisioning event type**. It does not establish downstream account health, and related failures may remain unresolved.
+- Do not unassign/reassign users, alter profile mappings, or retry destructive changes solely on an automated hint. Validate consequences with the application owner and follow approved change procedures.
 - Okta System Log records can contain personal and security-sensitive information including usernames and IP addresses. Generated CSVs should be stored and transmitted only under organizational policy.
 
 ## Test without an Okta tenant
