@@ -152,7 +152,7 @@
       ? `${d.failedAttempts} of ${d.attempts.length} provisioning attempt(s) failed. Most recent failure: ${d.lastFailure}.`
       : `${d.attempts.length} provisioning attempt(s) found with no recorded failure.`;
     target.appendChild(element('p',{text:headline}));
-    if(d.recoveredAt)target.appendChild(element('p',{className:'finding ok',text:`A later provisioning attempt succeeded at ${d.recoveredAt}. Earlier failures may already be resolved; confirm in the app.`}));
+    if(d.recoveredAt)target.appendChild(element('p',{className:'finding ok',text:`A later SUCCESS event matched the most recent failed attempt by user, application and event type at ${d.recoveredAt}. This suggests a successful retry, but does not prove downstream access. Confirm directly in the application.`}));
     for(const f of d.appUserFindings)target.appendChild(element('p',{className:'finding '+f.level,text:f.text}));
     const failed=d.attempts.filter(a=>a.failed).slice(0,10);
     if(d.failedAttempts>failed.length)target.appendChild(element('p',{className:'muted',text:`Showing the 10 most recent of ${d.failedAttempts} failed attempts.`}));
