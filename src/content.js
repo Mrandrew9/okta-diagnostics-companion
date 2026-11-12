@@ -35,16 +35,21 @@
   shadow.appendChild(style);
   const launch = element('button', { id: 'launch', text: 'Okta diagnostics' });
   launch.setAttribute('aria-label','Open Okta diagnostics');
+  launch.setAttribute('aria-expanded','false');
+  launch.setAttribute('aria-controls','panel');
   shadow.appendChild(launch);
   const panel = element('section',{id:'panel'});
   panel.hidden = true;
+  panel.setAttribute('role','region');
+  panel.setAttribute('aria-label','Okta Diagnostics Companion');
   shadow.appendChild(panel);
-  launch.addEventListener('click', () => { launch.hidden = true; panel.hidden = false; });
+  launch.addEventListener('click', openPanel);
   // Shadow DOM uses page styles minimally. Never insert untrusted API data as HTML.
   const head=element('header');
   head.appendChild(element('h2',{text:'Okta Diagnostics Companion'}));
   const close=element('button',{text:'Close'});
-  close.addEventListener('click',()=>{panel.hidden=true;launch.hidden=false;});
+  close.addEventListener('click',closePanel);
+  panel.addEventListener('keydown',e=>{if(e.key==='Escape'){e.stopPropagation();closePanel();}});
   head.appendChild(close); panel.appendChild(head);
   panel.appendChild(element('p',{className:'muted',text:'Read-only, local browser analysis. Uses your current authorized Okta session. No API token is requested or stored.'}));
   const grid=element('div',{className:'grid'});panel.appendChild(grid);
@@ -57,11 +62,12 @@
   const run=element('button',{text:'Analyze user',className:'primary'});
   const exportButton=element('button',{text:'Export displayed CSV'});exportButton.disabled=true;
   actions.append(run,exportButton);
-  const msg=element('p',{className:'muted',text:'Searches bounded user log events by actor and target. Results are limited to 3 pages per query (up to 600 before deduplication).'});panel.appendChild(msg);
+  const msg=element('p',{id:'status',className:'muted',text:'Searches bounded user log events by actor and target. Results are limited to 3 pages per query (up to 600 before deduplication).'});panel.appendChild(msg);
   const info=element('div',{className:'summary',text:'Enter an Okta user ID or login to begin.'});panel.appendChild(info);
   const stats=element('div',{className:'stats'});panel.appendChild(stats);
   const hints=element('div',{className:'summary',text:'Diagnostic hints appear here when supported by failed or denied events.'});panel.appendChild(hints);
   const scroll=element('div',{className:'scroll'});panel.appendChild(scroll);
+  msg.setAttribute('role','status');msg.setAttribute('aria-live','polite');
   let displayed=[];
 
   run.addEventListener('click',async()=>{
@@ -119,6 +125,8 @@
     msg.className='warning';msg.textContent='CSV downloaded locally. Contains user/security metadata (including IP addresses). Store and share only through approved channels.';
   });
 
+  function openPanel(){launch.hidden=true;launch.setAttribute('aria-expanded','true');panel.hidden=false;userInput.focus();}
+  function closePanel(){panel.hidden=true;launch.hidden=false;launch.setAttribute('aria-expanded','false');launch.focus();}
   function element(tag,{id,text,className}={}){
     const x=document.createElement(tag);if(id)x.id=id;if(text!==undefined)x.textContent=text;if(className)x.className=className;return x;
   }
