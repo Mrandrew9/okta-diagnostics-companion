@@ -35,16 +35,21 @@
   shadow.appendChild(style);
   const launch = element('button', { id: 'launch', text: 'Okta diagnostics' });
   launch.setAttribute('aria-label','Open Okta diagnostics');
+  launch.setAttribute('aria-expanded','false');
+  launch.setAttribute('aria-controls','panel');
   shadow.appendChild(launch);
   const panel = element('section',{id:'panel'});
   panel.hidden = true;
+  panel.setAttribute('role','region');
+  panel.setAttribute('aria-label','Okta Diagnostics Companion');
   shadow.appendChild(panel);
-  launch.addEventListener('click', () => { launch.hidden = true; panel.hidden = false; });
+  launch.addEventListener('click', openPanel);
   // Shadow DOM uses page styles minimally. Never insert untrusted API data as HTML.
   const head=element('header');
   head.appendChild(element('h2',{text:'Okta Diagnostics Companion'}));
   const close=element('button',{text:'Close'});
-  close.addEventListener('click',()=>{panel.hidden=true;launch.hidden=false;});
+  close.addEventListener('click',closePanel);
+  panel.addEventListener('keydown',e=>{if(e.key==='Escape'){e.stopPropagation();closePanel();}});
   head.appendChild(close); panel.appendChild(head);
   panel.appendChild(element('p',{className:'muted',text:'Read-only, local browser analysis. Uses your current authorized Okta session. No API token is requested or stored.'}));
   const grid=element('div',{className:'grid'});panel.appendChild(grid);
@@ -57,11 +62,12 @@
   const run=element('button',{text:'Analyze user',className:'primary'});
   const exportButton=element('button',{text:'Export displayed CSV'});exportButton.disabled=true;
   actions.append(run,exportButton);
-  const msg=element('p',{className:'muted',text:'Searches bounded user log events by actor and target. Results are limited to 3 pages per query (up to 600 before deduplication).'});panel.appendChild(msg);
+  const msg=element('p',{id:'status',className:'muted',text:'Searches bounded user log events by actor and target. Results are limited to 3 pages per query (up to 600 before deduplication).'});panel.appendChild(msg);
   const info=element('div',{className:'summary',text:'Enter an Okta user ID or login to begin.'});panel.appendChild(info);
   const stats=element('div',{className:'stats'});panel.appendChild(stats);
-  const hints=element('div',{className:'summary',text:'Diagnostic hints appear here when supported by failed events.'});panel.appendChild(hints);
+  const hints=element('div',{className:'summary',text:'Diagnostic hints appear here when supported by failed or denied events.'});panel.appendChild(hints);
   const scroll=element('div',{className:'scroll'});panel.appendChild(scroll);
+  msg.setAttribute('role','status');msg.setAttribute('aria-live','polite');
   let displayed=[];
 
   run.addEventListener('click',async()=>{
@@ -82,7 +88,7 @@
       const unfiltered=logs.events;
       displayed=appId ? unfiltered.filter(x=>core.matchesApp(x,appId)) : unfiltered;
       const s=core.summarize(displayed);
-      const bits=[`User: ${resolved} · Okta status: ${user.status || 'unknown'}`,`Events returned: ${s.total} · failures: ${s.failures}`];
+      const bits=[`User: ${resolved} · Okta status: ${user.status || 'unknown'}`,`Events returned: ${s.total} · failures: ${s.failures} · denials: ${s.denials}`];
       if(appId){
         try {
           const appUser=await getJson(`/api/v1/apps/${encodeURIComponent(appId)}/users/${encodeURIComponent(user.id)}`);
@@ -95,14 +101,14 @@
       bits.push('Assignment or app-user presence does not prove downstream SCIM provisioning succeeded. Review corresponding System Log events.');
       if(logs.pageLimitHit)bits.push('Partial results: safety page limit reached. Narrow the time window for more complete coverage.');
       info.textContent=bits.join('\n');
-      for(const [name,value] of Object.entries({Events:s.total,Failures:s.failures,'Sign-ins':s.signIn,Provisioning:s.provisioning,Security:s.security})){
+      for(const [name,value] of Object.entries({Events:s.total,Failures:s.failures,Denials:s.denials,'Sign-ins':s.signIn,Provisioning:s.provisioning,Security:s.security})){
         stats.appendChild(element('span',{className:'pill',text:`${name}: ${value}`}));
       }
       const observedHints=core.triageHints(displayed);
       hints.textContent=observedHints.length ? 'Observed failure patterns (not definitive root causes):\n' + observedHints.map(h=>`• ${h.count} × ${h.eventType}: ${h.guidance}`).join('\n') : 'No pre-defined failure patterns detected in the returned events. Inspect individual event outcomes below.';
       renderTable(displayed,scroll);
       exportButton.disabled=displayed.length===0;
-      msg.textContent='Report generated locally. A failed event is an observed outcome, not an automatic root-cause determination.';
+      msg.textContent='Report generated locally. A failed or denied event is an observed outcome, not an automatic root-cause determination.';
     }catch(e){hints.textContent='No diagnostic hints available.';msg.className='error';msg.textContent=`Could not complete diagnostics: ${e.message}`;info.textContent='If the API returns 401/403, check your Okta Admin login and role permissions. If the browser blocks requests, review tenant CORS/session settings; do not paste an API token into this extension.';}
     finally{run.disabled=false;}
   });
@@ -119,6 +125,8 @@
     msg.className='warning';msg.textContent='CSV downloaded locally. Contains user/security metadata (including IP addresses). Store and share only through approved channels.';
   });
 
+  function openPanel(){launch.hidden=true;launch.setAttribute('aria-expanded','true');panel.hidden=false;userInput.focus();}
+  function closePanel(){panel.hidden=true;launch.hidden=false;launch.setAttribute('aria-expanded','false');launch.focus();}
   function element(tag,{id,text,className}={}){
     const x=document.createElement(tag);if(id)x.id=id;if(text!==undefined)x.textContent=text;if(className)x.className=className;return x;
   }
@@ -139,16 +147,27 @@
       }tbody.appendChild(tr);
     }table.append(thead,tbody);target.appendChild(table);
   }
+  function apiError(response,label){
+    const status=response.status;
+    if(status===429){
+      const reset=Number(response.headers.get('X-Rate-Limit-Reset'));
+      const wait=Number.isFinite(reset)&&reset>0?Math.max(0,Math.ceil(reset-Date.now()/1000)):null;
+      return new Error(`${label} rate limit reached (HTTP 429). Wait${wait!==null?` about ${wait}s`:' a minute'} and retry, or narrow the time window.`);
+    }
+    if(status===401||status===403)return new Error(`${label} HTTP ${status}: your current admin session or role is not authorized for this request.`);
+    if(status===404)return new Error(`${label} HTTP 404: the requested user or app was not found or is not visible to your role.`);
+    return new Error(`${label} HTTP ${status}`);
+  }
   async function getJson(path){
     const response=await fetch(path,{method:'GET',credentials:'same-origin',headers:{Accept:'application/json'},redirect:'error'});
-    if(!response.ok)throw new Error(`Okta API HTTP ${response.status}`);
+    if(!response.ok)throw apiError(response,'Okta API');
     return response.json();
   }
   async function getLogPage(url){
     const target=new URL(url);
     if(target.origin!==location.origin||target.pathname!=='/api/v1/logs')throw new Error('Refused unexpected API target.');
     const response=await fetch(target.href,{method:'GET',credentials:'same-origin',headers:{Accept:'application/json'},redirect:'error'});
-    if(!response.ok)throw new Error(`System Log API HTTP ${response.status}`);
+    if(!response.ok)throw apiError(response,'System Log API');
     return {events:await response.json(),link:response.headers.get('Link')};
   }
 })();
