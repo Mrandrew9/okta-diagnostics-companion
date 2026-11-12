@@ -10,10 +10,7 @@
         "https://*.okta-emea.com/*",
         "https://*.oktapreview.com/*"
       ],
-      "js": [
-        "src/core.js",
-        "src/content.js"
-      ],
+      "js": ["src/core.js", "src/content.js"],
       "run_at": "document_idle"
     }
   ]
