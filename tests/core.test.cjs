@@ -163,3 +163,60 @@ test('CSV includes provisioning cause column',()=>{
   assert.match(csv.split('\r\n')[0],/"cause"$/);
   assert.match(csv.split('\r\n')[1],/"account_conflict"$/);
 });
+
+
+test('later success in another app, user, or operation is not presented as recovery',()=>{
+  const failure=prov({uuid:'fail',published:'2026-11-02T10:00:00.000Z',
+    transaction:{id:'txFailure'},outcome:{result:'FAILURE',reason:'409 Conflict'}});
+  const otherApp={id:'0oaSYNTHAPP0002',type:'AppInstance',displayName:'Unrelated app'};
+  const otherUser={id:'00uOTHERUSER12345',type:'User'};
+  const later='2026-11-03T10:00:00.000Z';
+  const unrelated=[
+    prov({uuid:'other-app',published:later,target:[USER,otherApp],transaction:{id:'txOtherApp'}}),
+    prov({uuid:'other-user',published:later,target:[otherUser,APP],transaction:{id:'txOtherUser'}}),
+    prov({uuid:'other-operation',published:later,eventType:'application.provision.user.sync',transaction:{id:'txOtherAction'}})
+  ];
+  const d=core.diagnoseProvisioning([failure,...unrelated],null);
+  assert.equal(d.failedAttempts,1);
+  assert.equal(d.recoveredAt,'');
+  assert.equal(d.attempts.find(a=>a.failed).recoveredAt,'');
+});
+
+test('matching subsequent success indicates only a matching retry, not all failures resolved',()=>{
+  const first=prov({uuid:'failure-a',published:'2026-11-02T09:00:00.000Z',transaction:{id:'failure-a'},outcome:{result:'FAILURE',reason:'400 Invalid value'}});
+  const second=prov({uuid:'failure-b',published:'2026-11-02T10:00:00.000Z',transaction:{id:'failure-b'},outcome:{result:'FAILURE',reason:'403 Forbidden'}});
+  const success=prov({uuid:'retry-ok',published:'2026-11-03T12:00:00.000Z',transaction:{id:'retry-1'}});
+  const d=core.diagnoseProvisioning([first,second,success],null);
+  assert.equal(d.failedAttempts,2);
+  assert.equal(d.recoveredAt,'2026-11-03T12:00:00.000Z');
+  const differentActionFailure=prov({uuid:'failure-untreated',published:'2026-11-04T12:00:00.000Z',eventType:'application.provision.user.sync',
+    transaction:{id:'sync-fail'},outcome:{result:'FAILURE',reason:'500 Failed'}});
+  const next=core.diagnoseProvisioning([first,second,success,differentActionFailure],null);
+  assert.equal(next.recoveredAt,'');
+  assert.equal(next.lastFailure,'2026-11-04T12:00:00.000Z');
+});
+
+test('redacts embedded credentials, URL, email, and IP from error evidence and CSV',()=>{
+  const event=prov({
+    outcome:{result:'FAILURE',reason:'401 Unauthorized: Authorization: Bearer supersecret123 sent to https://example.invalid/api?token=hidden123 for jane.doe@example.com (192.0.2.8)'},
+    debugContext:{debugData:{errorMessage:'api_key=privatekey42 client_secret="secretdetail99"',authToken:'do-not-include'}},
+    displayMessage:'Token: password123 at https://example.invalid/x?api_key=moresecret'
+  });
+  const evidence=core.provisioningErrorText(event);
+  const csv=core.toCsv([event]);
+  const table=core.rowFor(event);
+  for(const value of ['supersecret123','hidden123','jane.doe@example.com','192.0.2.8','privatekey42','secretdetail99','password123','moresecret','do-not-include']){
+    assert.equal(evidence.includes(value),false,'evidence leaked '+value);
+    assert.equal(csv.includes(value),false,'CSV leaked '+value);
+    assert.equal((table.reason + table.message).includes(value),false,'table leaked '+value);
+  }
+  assert.match(evidence,/401 Unauthorized/);
+  assert.match(evidence,/redacted/);
+});
+
+test('missing user or app identity cannot create a recovered signal',()=>{
+  const fail=prov({published:'2026-11-02T10:00:00.000Z',outcome:{result:'FAILURE',reason:'failed'},
+    transaction:{id:'fail'},target:[APP]});
+  const next=prov({published:'2026-11-03T10:00:00.000Z',transaction:{id:'ok'},target:[APP]});
+  assert.equal(core.diagnoseProvisioning([fail,next],null).recoveredAt,'');
+});
