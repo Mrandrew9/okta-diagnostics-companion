@@ -52,7 +52,7 @@ test('matches app target without guessing from message',()=>{
 test('CSV quotes fields and neutralizes spreadsheet formulas',()=>{
   const ev={published:'2026-11-01T00:00:00Z',eventType:'user.authentication.sso',displayMessage:'=HYPERLINK("https://bad.example","click")',actor:{alternateId:'"name",corp'},outcome:{result:'FAILURE',reason:'-VALUE'}};
   const csv=core.toCsv([ev]);
-  assert.match(csv,/"'=HYPERLINK\(""https:\/\/bad.example""/);
+  assert.match(csv,/"'=HYPERLINK\(""\[redacted URL\]""/);
   assert.match(csv,/"'-VALUE"/);
   assert.match(csv,/"""name"",corp"/);
   assert.equal(core.escapeCsv('\tcmd'),`"'\tcmd"`);
