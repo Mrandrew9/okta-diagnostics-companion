@@ -18,6 +18,7 @@ A small, independently written Chrome extension designed to run **alongside** th
 | User-related System Log | Bounded queries filtered separately by `actor.id` and `target.id`; deduplicated and ordered locally |
 | Failure breakdown | Count observed `FAILURE` and `DENY` outcomes (Okta records policy denials as `DENY`) and classify relevant authentication, provisioning, and policy/security events |
 | Application-specific evidence | Optional app ID: show the corresponding app-user record when accessible and filter log events explicitly targeting the app |
+| Provisioning diagnosis | Group provisioning events into attempts by `transaction.id`, read the error text Okta recorded, map it to a likely cause (see below) with what to check, interpret the app-user `syncState`/`status`, and flag a later matching SUCCESS event (same user, app, and operation; not proof of downstream recovery) |
 | Guided triage | Explain a few **observed event types** without inventing root causes |
 | CSV evidence export | Explicit local download of currently displayed events, with CSV formula-injection protection |
 | Privacy controls | No telemetry, no analytics, no API token prompt, no local storage; API calls go to the current Okta origin |
@@ -51,6 +52,26 @@ The extension accesses **only the current Okta organization origin**, using an e
 
 **Authorization:** Browser-session permissions depend on the Okta tenant, the signed-in admin's role, and browser session/CORS configuration. A `401` or `403` indicates missing authorization or session access, not necessarily a software defect. **Do not add privileged API tokens to extension source, browser storage, or screenshots** to work around this. A future release may implement properly scoped OAuth authentication.
 
+## Provisioning diagnosis
+
+When a user fails to provision to an app, the panel shows each failed attempt with a likely cause, why it happens, what to check, and the exact text Okta recorded. Causes are matched **only** from error text present on the event (`outcome.reason` and error-like `debugContext.debugData` fields; request URLs and secret-like keys are ignored):
+
+| Cause | Matched from recorded text such as |
+| --- | --- |
+| Downstream rate limit | `429`, "rate limit", "too many requests" |
+| Account already exists / conflict | `409`, "already exists", "duplicate" |
+| Integration credentials rejected | `401`/`403`, "unauthorized", "invalid token", "expired credential" |
+| User or resource not found in app | `404`, "not found", "does not exist" |
+| License or quota exhausted | "license", "seats", "quota" |
+| Response format not readable | "unable to parse", "content-type", "scim+json" |
+| Attribute or profile value rejected | `400`/`422`, "required attribute", "invalid value", "schema", "validation" |
+| Application unavailable | `5xx`, "timeout", "connection refused", TLS/certificate errors |
+| Provisioning action disabled | "provisioning not enabled", "push disabled" |
+
+Okta often logs provisioning failures (for example `application.provision.user.sync` with legacy type `app.user_management.provision_user_failed`) **without** any error text. In that case the companion says so and points to **Dashboard > Tasks** (or the error icon on the app's Assignments tab), where Okta keeps the full error and a Retry option. It does not guess.
+
+With an app ID, the app-user record's `syncState` is also interpreted: `ERROR` (last sync failed), `OUT_OF_SYNC`, `SYNCING`, `DISABLED`, or `SYNCHRONIZED`, together with `STAGED`/`PENDING` status and `lastSync`. The CSV export includes a `cause` column for failed provisioning events. A later `SUCCESS` record is displayed as a **possible successful retry** only when the user ID, app ID, and event type match the failed operation; actual downstream access still requires separate confirmation.
+
 ## Query and evidence limitations
 
 - System Log is queried using `GET /api/v1/logs`, with both `since` and `until` so pagination is **finite**. The companion uses `actor.id` and `target.id` separately because Okta events may identify a user in either position.
@@ -60,6 +81,9 @@ The extension accesses **only the current Okta organization origin**, using an e
 - The optional app filter matches events whose `target` explicitly contains the app ID. Related events with missing/different app targets will not appear in that filtered view.
 - User status, app assignment, app-user record status, downstream SCIM delivery, and successful end-user access are **different facts**. Do not conflate them.
 - Displayed security indicators and guidance are **triage hints** anchored to recorded event types, not definitive incident attribution.
+- Error details from Okta are untrusted and can accidentally contain credentials or personal data. The companion applies best-effort **value-level redaction** of tokens, passwords, URLs, email addresses and IP addresses to displayed error text and CSV message/reason fields. This is not an exhaustive DLP system; inspect any export before sharing.
+- A recovery indicator requires a later matching successful event for the **same user, application and provisioning event type**. It does not establish downstream account health, and related failures may remain unresolved.
+- Do not unassign/reassign users, alter profile mappings, or retry destructive changes solely on an automated hint. Validate consequences with the application owner and follow approved change procedures.
 - Okta System Log records can contain personal and security-sensitive information including usernames and IP addresses. Generated CSVs should be stored and transmitted only under organizational policy.
 
 ## Test without an Okta tenant
@@ -70,15 +94,16 @@ Requires Node.js 20+:
 node --test tests/*.test.cjs
 ```
 
-Tests cover time bounds, filter construction, pagination origin restrictions, deduplication and page caps, event classification, app targeting, CSV output sanitization, and triage hints. These tests **do not** validate browser extension permissions or live Okta API behavior.
+Tests cover time bounds, filter construction, pagination origin restrictions, deduplication and page caps, event classification, app targeting, CSV output sanitization, triage hints, and provisioning cause classification, attempt grouping and app-user interpretation using synthetic fixtures. These tests **do not** validate browser extension permissions or live Okta API behavior.
 
 ## Next roadmap
 
 1. **V0.2:** Live end-to-end verification in an Okta test org, signed-in browser permission checks, and sanitized screenshots.
-2. **V0.3:** Correlate related log events by `transaction.id`, session, app, and sequence, then show an evidence-backed timeline for login/SCIM failure investigations.
+2. **V0.3:** ~~Provisioning failure diagnosis grouped by `transaction.id`~~ (done). Next: a full sign-in timeline correlated by session and sequence.
 3. **V0.4:** Optional scoped OAuth (`okta.users.read`, `okta.apps.read`, `okta.logs.read`) and enhanced permission/error reporting.
-4. **V0.5:** Detect common integration failures such as app API credential failures, rate limits, attribute mapping errors, and user-assignment changes; optional support-ticket export with PII redaction.
-5. **Upstream proposal:** Discuss a focused diagnostic integration with Rockstar's maintainer after tests and reviews, instead of copying the older Manifest V2 repository.
+4. **V0.5:** Security investigations: repeated MFA push denials (MFA fatigue), account lockouts after failed sign-ins, sign-ins from new countries or ASNs, and Okta ThreatInsight/risk events, each with recorded evidence and next steps.
+5. **V0.6:** Copyable support-ticket summary of a diagnosis with PII redaction, and an app-wide view of provisioning failures across users.
+6. **Upstream proposal:** Discuss a focused diagnostic integration with Rockstar's maintainer after tests and reviews, instead of copying the older Manifest V2 repository.
 
 ## Technical choices
 
