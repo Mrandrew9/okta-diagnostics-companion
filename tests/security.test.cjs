@@ -178,3 +178,16 @@ test('signals are sorted by severity and counted; bad input is tolerated', () =>
   assert.deepEqual(r.counts, { high: 1, medium: 1, low: 0 });
   assert.deepEqual(sec.analyzeSecurity(null).signals, []);
 });
+
+test('takeover evidence is not duplicated and the sequence is listed first', () => {
+  const session = ev('user.session.start', 5, { debugContext: { debugData: { behaviors: '{New Country=POSITIVE}' } } });
+  const r = sec.analyzeSecurity([
+    ev('user.mfa.okta_verify.deny_push', 0, { outcome: { result: 'FAILURE' } }),
+    ev('user.mfa.okta_verify.deny_push', 1, { outcome: { result: 'FAILURE' } }),
+    session,
+    ev('user.account.privilege.grant', 60, { actor: { id: ADMIN, alternateId: 'admin@example.com' } })
+  ], { userId: UID });
+  assert.equal(r.signals[0].id, 'possible_account_takeover');
+  const evidenceIds = r.signals[0].evidence.map(e => e.eventId);
+  assert.equal(new Set(evidenceIds).size, evidenceIds.length);
+});

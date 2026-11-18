@@ -393,7 +393,7 @@
     const fatigueAnchors = signals.filter(s => s.id === 'mfa_fatigue_accepted')
       .map(s => s.evidence[s.evidence.length - 1]).filter(Boolean)
       .map(ev => events.find(e => (ev.eventId && e.uuid === ev.eventId) || e.published === ev.published)).filter(Boolean);
-    const anchorEventsAll = [...signInAnchors, ...fatigueAnchors];
+    const anchorEventsAll = [...new Map([...signInAnchors, ...fatigueAnchors].map(e => [e.uuid || `${e.published}|${e.eventType}`, e])).values()];
     if (!anchorEventsAll.length) return [];
     const anchorTimes = [...new Set(anchorEventsAll.map(time))].sort((a, b) => a - b);
     const within = e => anchorTimes.some(t => time(e) > t && time(e) - t <= TAKEOVER_WINDOW_MS);
@@ -445,7 +445,9 @@
       ...detectThreatInsight(list)
     ];
     signals.push(...detectTakeoverSequence(list, signals, signInAnchors));
-    signals.sort((a, b) => (SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]) || String(b.last).localeCompare(String(a.last)));
+    // Within a severity, the takeover sequence comes first because it links the other signals.
+    const linked = s => (s.id === 'possible_account_takeover' ? 1 : 0);
+    signals.sort((a, b) => (SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]) || (linked(b) - linked(a)) || String(b.last).localeCompare(String(a.last)));
     const counts = { high: 0, medium: 0, low: 0 };
     signals.forEach(s => { counts[s.severity] += 1; });
     return { signals, counts, coverage: coverage(list) };
