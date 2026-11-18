@@ -19,6 +19,7 @@ A small, independently written Chrome extension designed to run **alongside** th
 | Failure breakdown | Count observed `FAILURE` and `DENY` outcomes (Okta records policy denials as `DENY`) and classify relevant authentication, provisioning, and policy/security events |
 | Application-specific evidence | Optional app ID: show the corresponding app-user record when accessible and filter log events explicitly targeting the app |
 | Provisioning diagnosis | Group provisioning events into attempts by `transaction.id`, read the error text Okta recorded, map it to a likely cause (see below) with what to check, interpret the app-user `syncState`/`status`, and flag a later matching SUCCESS event (same user, app, and operation; not proof of downstream recovery) |
+| Security signals | Turn the user's recorded events into prioritized leads: MFA fatigue, user-reported suspicious activity, MFA factor removal, admin privilege grants, support impersonation, risky or new-location sign-ins, Identity Threat Protection and partner risk, lockouts, ThreatInsight, and possible account-takeover sequences (see below) |
 | Guided triage | Explain a few **observed event types** without inventing root causes |
 | CSV evidence export | Explicit local download of currently displayed events, with CSV formula-injection protection |
 | Privacy controls | No telemetry, no analytics, no API token prompt, no local storage; API calls go to the current Okta origin |
@@ -32,6 +33,8 @@ flowchart LR
   B --> L["Bounded System Log API: actor + target"]
   B --> P["Optional app-user record"]
   L --> N["Deduplicate + classify + summarize"]
+  N --> S["Security signals"]
+  S --> D
   N --> D["On-screen investigation"]
   N --> C["Explicit local CSV download"]
   U --> D
@@ -51,6 +54,33 @@ The extension accesses **only the current Okta organization origin**, using an e
 **Supported origins:** `https://*.okta.com`, `https://*.okta-emea.com`, and `https://*.oktapreview.com`. The companion is **not yet tested** on custom domains, government domains, or alternative admin host layouts. Its UI loads on `/admin` paths only.
 
 **Authorization:** Browser-session permissions depend on the Okta tenant, the signed-in admin's role, and browser session/CORS configuration. A `401` or `403` indicates missing authorization or session access, not necessarily a software defect. **Do not add privileged API tokens to extension source, browser storage, or screenshots** to work around this. A future release may implement properly scoped OAuth authentication.
+
+## Security signals
+
+The panel turns one user's System Log events into **prioritized leads** for an investigator. Each signal shows what was observed, why it matters, next steps, and the supporting events (time, event type, outcome, actor, IP, location, client). Signals use all of the user's events in the window, even when an app filter is set.
+
+| Signal | Severity | Based on |
+| --- | --- | --- |
+| Possible account takeover sequence | High | A risky, impossible-travel or new-country sign-in, or an accepted MFA-fatigue sequence, followed within 24 hours by MFA removal/reset, password reset, admin privilege grant or impersonation. A new factor enrolment counts only alongside a factor removal, so a routine new device is not flagged. |
+| Denied MFA pushes followed by a successful sign-in | High | 2+ Okta Verify push denials within 10 minutes, then a successful authentication within 10 minutes (`user.mfa.okta_verify.deny_push`; Identity Engine `user.authentication.auth_via_mfa` failures with factor `OKTA_VERIFY_PUSH`) |
+| Repeated MFA push denials | Medium | 3+ push denials within 10 minutes without a following success |
+| User reported suspicious activity | High | `user.account.report_suspicious_activity_by_enduser` |
+| Admin privileges granted | High | `user.account.privilege.grant` |
+| Risky / impossible-travel sign-in | High or Medium | Okta risk level `HIGH`/`MEDIUM`, or `Velocity=POSITIVE` behavior, on `user.session.start` / `policy.evaluate_sign_on` |
+| New location, device or network | Low | Okta behavior detection (`New Country`, `New Geo-Location`, `New Device`, `New IP`, `New ASN`, …) |
+| Identity Threat Protection / partner risk | By risk level | `user.risk.detect` (including *Security Events Provider Reported Risk* from partners such as CrowdStrike) and `security.events.provider.receive_event` |
+| MFA factor removed or reset | Medium | `user.mfa.factor.deactivate`, `reset_all`, `suspend` (security-question resets ignored), noting whether another account performed it |
+| Support impersonation | Medium | `user.session.impersonation.grant` / `initiate` |
+| Account locked after failed sign-ins | Medium, High if failures came from 3+ IPs | `user.account.lock` with failed sign-ins in the preceding hour |
+| Okta detected a security threat | Medium | `security.threat.detected` |
+
+Thresholds follow widely published detection logic for Okta (for example 2 push denials then a success within 10 minutes for MFA fatigue) and are deliberately conservative.
+
+**Coverage notes** appear when data is missing, so an empty result isn't mistaken for a clean account:
+- Risk and behavior details appear on sign-in events only when sign-on policies evaluate risk or behavior.
+- `user.risk.detect` and partner signals require Okta Identity Threat Protection. Okta records the partner event, but the original context lives in the partner console (for example the EDR).
+
+Signals are **leads, not verdicts**. Confirm with the user through a trusted channel and follow your incident response procedure before taking action. The extension never changes the account.
 
 ## Provisioning diagnosis
 
@@ -101,7 +131,7 @@ Tests cover time bounds, filter construction, pagination origin restrictions, de
 1. **V0.2:** Live end-to-end verification in an Okta test org, signed-in browser permission checks, and sanitized screenshots.
 2. **V0.3:** ~~Provisioning failure diagnosis grouped by `transaction.id`~~ (done). Next: a full sign-in timeline correlated by session and sequence.
 3. **V0.4:** Optional scoped OAuth (`okta.users.read`, `okta.apps.read`, `okta.logs.read`) and enhanced permission/error reporting.
-4. **V0.5:** Security investigations: repeated MFA push denials (MFA fatigue), account lockouts after failed sign-ins, sign-ins from new countries or ASNs, and Okta ThreatInsight/risk events, each with recorded evidence and next steps.
+4. **V0.5:** ~~Security signals: MFA fatigue, lockouts, risky/new-location sign-ins, ITP and partner risk, factor and privilege changes, account-takeover sequences~~ (done). Next: links that open the same user in SailPoint and CrowdStrike Falcon consoles (configured URLs, your own SSO session, no stored secrets).
 5. **V0.6:** Copyable support-ticket summary of a diagnosis with PII redaction, and an app-wide view of provisioning failures across users.
 6. **Upstream proposal:** Discuss a focused diagnostic integration with Rockstar's maintainer after tests and reviews, instead of copying the older Manifest V2 repository.
 
@@ -111,12 +141,15 @@ Tests cover time bounds, filter construction, pagination origin restrictions, de
 - **Chrome Manifest V3:** avoids continuing development against an older Manifest V2 baseline.
 - **Read-only methods:** all Okta API calls are `GET`; no app provisioning, user changes, or security-policy changes.
 - **Explicit evidence export:** no automatic log transmission or persistent background collection.
-- **Testable core:** classification, pagination security and CSV serialization are independent of the browser DOM.
+- **Testable core:** classification, pagination security, CSV serialization and security detections (`src/security.js`) are independent of the browser DOM.
 
 ## References
 
 - [Okta System Log API query guide](https://developer.okta.com/docs/reference/system-log-query/)
 - [Okta Event Types](https://developer.okta.com/docs/reference/api/event-types/)
+- [Okta: System Log queries for attempted account takeover](https://support.okta.com/help/s/article/System-Log-queries-for-attempted-account-takeover)
+- [Okta: Behavior Detection System Log events](https://help.okta.com/oie/en-us/content/topics/security/behavior-detection/logs-behavior-detection.htm)
+- [Okta: Configure a shared signal receiver (ITP)](https://help.okta.com/oie/en-us/content/topics/itp/configure-shared-signal-provider.htm)
 - [Okta Applications API](https://developer.okta.com/docs/api/openapi/okta-management/management/tags/application)
 - [OAuth for Okta API endpoints](https://developer.okta.com/docs/guides/implement-oauth-for-okta/main/)
 - [Rockstar project](https://gabrielsroka.github.io/rockstar/)

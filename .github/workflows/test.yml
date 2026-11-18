@@ -14,6 +14,7 @@ jobs:
       - name: Check JavaScript syntax
         run: |
           node --check src/core.js
+          node --check src/security.js
           node --check src/content.js
       - name: Test pure diagnostic functions
         run: node --test tests/*.test.cjs
