@@ -154,6 +154,19 @@ Tests cover time bounds, filter construction, pagination origin restrictions, de
 - [OAuth for Okta API endpoints](https://developer.okta.com/docs/guides/implement-oauth-for-okta/main/)
 - [Rockstar project](https://gabrielsroka.github.io/rockstar/)
 
+## How this was built
+
+Okta Diagnostics Companion is designed and maintained by Andrew Yonan and built with **Claude**, Anthropic's AI model, as a coding partner. Using AI is a deliberate part of how this project is engineered, not something hidden.
+
+| Andrew decides | Claude does, under review |
+| --- | --- |
+| What to investigate and why, from Okta administration experience | Drafts detection logic, tests and documentation |
+| The security model: read-only, the admin's own session, no stored tokens, no telemetry | Checks Okta event names and fields against Okta's documentation |
+| Which signals and thresholds are worth flagging, and how conservative to be | Proposes options and argues for and against them |
+| What merges | Opens pull requests for review |
+
+Every change goes through a pull request, must pass the automated tests (36 at the time of writing, using synthetic fixtures only) and merges into a protected `main` branch. Detection rules still need confirming in a nonproduction Okta tenant before they are relied on. Commits written with Claude carry a `Co-Authored-By: Claude` trailer from this change on; earlier commits were also made with Claude's help and predate the trailer.
+
 ## Attribution and independence
 
 This repository is an **original companion implementation** and does not copy Rockstar source code. Rockstar is a separate, community-created project by Gabriel Sroka. This repository is neither sponsored nor supported by Okta, Rockstar, or an employer. All examples and tests are synthetic. Contributions and security reports are welcome.
